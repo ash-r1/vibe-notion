@@ -174,36 +174,39 @@ describe('TokenExtractor', () => {
     expect(extractor.getNotionDir()).toBe(fallbackDir)
   })
 
-  test('extract returns token and user_id from cookies sqlite', async () => {
-    const notionDir = mkdtempSync(join(tmpdir(), 'notion-test-'))
-    tempDirs.push(notionDir)
+  test.each(['.notion.so', '.notion.com', '.www.notion.com', 'app.notion.com', '.app.notion.com'])(
+    'extract returns token and user_id from %s desktop cookies',
+    async (hostKey) => {
+      const notionDir = mkdtempSync(join(tmpdir(), 'notion-test-'))
+      tempDirs.push(notionDir)
 
-    const partitionDir = join(notionDir, 'Partitions', 'notion')
-    mkdirSync(partitionDir, { recursive: true })
-    const dbPath = join(partitionDir, 'Cookies')
+      const partitionDir = join(notionDir, 'Partitions', 'notion')
+      mkdirSync(partitionDir, { recursive: true })
+      const dbPath = join(partitionDir, 'Cookies')
 
-    createCookiesDb(dbPath, [
-      {
-        name: 'token_v2',
-        value: 'v02%3Atest-token',
-        encrypted_value: new Uint8Array(),
-        host_key: '.notion.so',
-        last_access_utc: 2,
-      },
-      {
-        name: 'notion_user_id',
-        value: 'user-123',
-        encrypted_value: new Uint8Array(),
-        host_key: '.notion.so',
-        last_access_utc: 1,
-      },
-    ])
+      createCookiesDb(dbPath, [
+        {
+          name: 'token_v2',
+          value: 'v02%3Atest-token',
+          encrypted_value: new Uint8Array(),
+          host_key: hostKey,
+          last_access_utc: 2,
+        },
+        {
+          name: 'notion_user_id',
+          value: 'user-123',
+          encrypted_value: new Uint8Array(),
+          host_key: hostKey,
+          last_access_utc: 1,
+        },
+      ])
 
-    const extractor = new TokenExtractor('darwin', notionDir)
-    const extracted = await extractor.extract()
+      const extractor = new TokenExtractor('darwin', notionDir)
+      const extracted = await extractor.extract()
 
-    expect(extracted).toEqual({ token_v2: 'v02%3Atest-token', user_id: 'user-123' })
-  })
+      expect(extracted).toEqual({ token_v2: 'v02%3Atest-token', user_id: 'user-123' })
+    },
+  )
 
   test('extract returns null when cookies database has no token', async () => {
     const notionDir = mkdtempSync(join(tmpdir(), 'notion-empty-'))

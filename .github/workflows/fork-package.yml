@@ -1,0 +1,43 @@
+name: Fork package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    if: github.repository == 'ash-r1/vibe-notion'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.4'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck && bun run lint && bun run test
+      - name: Build Node.js package
+        run: bun scripts/package-fork.ts "$GITHUB_SHA" release
+      - name: Verify npm installation and both Node.js CLIs
+        run: |
+          npm install --prefix "$RUNNER_TEMP/notion-node" --omit=dev ./release/vibe-notion.tgz
+          "$RUNNER_TEMP/notion-node/node_modules/.bin/vibe-notion" --version
+          "$RUNNER_TEMP/notion-node/node_modules/.bin/vibe-notionbot" --version
+          node scripts/check-node-package.mjs "$RUNNER_TEMP/notion-node/node_modules/vibe-notion"
+      - name: Publish fork package without publishing to npm
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="fork-$GITHUB_SHA"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release/vibe-notion.tgz
+          else
+            gh release create "$tag" release/vibe-notion.tgz --target "$GITHUB_SHA" \
+              --title "Fork package $GITHUB_SHA" --notes "Built Node.js npm package. Install with Node.js 24 and npm; Bun is only used to build the package."
+          fi

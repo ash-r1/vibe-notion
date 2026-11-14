@@ -111,7 +111,18 @@ describe('BrowserTokenExtractor', () => {
     expect(result).toBeNull()
   })
 
-  test('extract finds token_v2 from a plaintext browser cookie', async () => {
+  test.each([
+    'notion.so',
+    '.notion.so',
+    'www.notion.so',
+    '.www.notion.so',
+    'notion.com',
+    '.notion.com',
+    'www.notion.com',
+    '.www.notion.com',
+    'app.notion.com',
+    '.app.notion.com',
+  ])('extract finds the token and user metadata from %s', async (hostKey) => {
     // given
     const homeBase = mkdtempSync(join(tmpdir(), 'browser-test-'))
     tempDirs.push(homeBase)
@@ -124,14 +135,20 @@ describe('BrowserTokenExtractor', () => {
         name: 'token_v2',
         value: 'v02%3Abrowser-token-value',
         encrypted_value: new Uint8Array(),
-        host_key: '.notion.so',
+        host_key: hostKey,
         last_access_utc: 1,
       },
       {
         name: 'notion_user_id',
         value: 'user-abc',
         encrypted_value: new Uint8Array(),
-        host_key: '.notion.so',
+        host_key: hostKey,
+        last_access_utc: 1,
+      },
+      {
+        name: 'notion_users',
+        value: '["user-abc","user-def"]',
+        host_key: hostKey,
         last_access_utc: 1,
       },
     ])
@@ -147,7 +164,11 @@ describe('BrowserTokenExtractor', () => {
     const result = await extractor.extract()
 
     // then
-    expect(result).toEqual({ token_v2: 'v02%3Abrowser-token-value', user_id: 'user-abc' })
+    expect(result).toEqual({
+      token_v2: 'v02%3Abrowser-token-value',
+      user_id: 'user-abc',
+      user_ids: ['user-abc', 'user-def'],
+    })
   })
 
   test('extract finds token from Network/Cookies path', async () => {
@@ -223,79 +244,85 @@ describe('BrowserTokenExtractor', () => {
     expect(result).toEqual({ token_v2: 'v02%3Awww-host-token', user_id: 'user-www' })
   })
 
-  test('extract returns null when cookie DB has no notion cookies', async () => {
-    // given
-    const homeBase = mkdtempSync(join(tmpdir(), 'browser-empty-'))
-    tempDirs.push(homeBase)
+  test.each(['.example.com', 'notion.com.example.com', '.notion.com.evil', 'evilnotion.com', '.notion.so.evil'])(
+    'extract ignores token cookies from unrelated host %s',
+    async (hostKey) => {
+      // given
+      const homeBase = mkdtempSync(join(tmpdir(), 'browser-empty-'))
+      tempDirs.push(homeBase)
 
-    const profileDir = createBrowserProfile(homeBase, 'TestBrowser', 'Default')
-    const cookiePath = join(profileDir, 'Cookies')
+      const profileDir = createBrowserProfile(homeBase, 'TestBrowser', 'Default')
+      const cookiePath = join(profileDir, 'Cookies')
 
-    createCookiesDb(cookiePath, [
-      {
-        name: 'other_cookie',
-        value: 'irrelevant',
-        encrypted_value: new Uint8Array(),
-        host_key: '.example.com',
-        last_access_utc: 1,
-      },
-    ])
+      createCookiesDb(cookiePath, [
+        {
+          name: 'token_v2',
+          value: 'irrelevant',
+          encrypted_value: new Uint8Array(),
+          host_key: hostKey,
+          last_access_utc: 1,
+        },
+      ])
 
-    // when
-    class TestExtractor extends BrowserTokenExtractor {
-      override getBrowserCookiePaths(): string[] {
-        return [cookiePath]
+      // when
+      class TestExtractor extends BrowserTokenExtractor {
+        override getBrowserCookiePaths(): string[] {
+          return [cookiePath]
+        }
       }
-    }
 
-    const extractor = new TestExtractor('darwin')
-    const result = await extractor.extract()
+      const extractor = new TestExtractor('darwin')
+      const result = await extractor.extract()
 
-    // then
-    expect(result).toBeNull()
-  })
+      // then
+      expect(result).toBeNull()
+    },
+  )
 
-  test('extract decrypts v10 encrypted cookie on darwin', async () => {
-    // given
-    const homeBase = mkdtempSync(join(tmpdir(), 'browser-v10-'))
-    tempDirs.push(homeBase)
+  test.each(['.notion.so', '.notion.com', '.www.notion.com', '.app.notion.com'])(
+    'extract decrypts v10 encrypted cookie from %s on darwin',
+    async (hostKey) => {
+      // given
+      const homeBase = mkdtempSync(join(tmpdir(), 'browser-v10-'))
+      tempDirs.push(homeBase)
 
-    const profileDir = createBrowserProfile(homeBase, 'TestBrowser', 'Default')
-    const cookiePath = join(profileDir, 'Cookies')
+      const profileDir = createBrowserProfile(homeBase, 'TestBrowser', 'Default')
+      const cookiePath = join(profileDir, 'Cookies')
 
-    const key = Buffer.from('1234567890abcdef')
-    const iv = Buffer.alloc(16, 0x20)
-    const plaintext = 'v02%3Aencrypted-browser-token'
-    const cipher = createCipheriv('aes-128-cbc', key, iv)
-    const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
-    const encrypted = Buffer.concat([Buffer.from('v10'), ciphertext])
+      const key = Buffer.from('1234567890abcdef')
+      const iv = Buffer.alloc(16, 0x20)
+      const plaintext = 'v02%3Aencrypted-browser-token'
+      const cipher = createCipheriv('aes-128-cbc', key, iv)
+      const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
+      const encrypted = Buffer.concat([Buffer.from('v10'), ciphertext])
 
-    createCookiesDb(cookiePath, [
-      {
-        name: 'token_v2',
-        value: '',
-        encrypted_value: new Uint8Array(encrypted),
-        host_key: '.notion.so',
-        last_access_utc: 1,
-      },
-    ])
+      createCookiesDb(cookiePath, [
+        {
+          name: 'token_v2',
+          value: '',
+          encrypted_value: new Uint8Array(encrypted),
+          host_key: hostKey,
+          last_access_utc: 1,
+        },
+      ])
 
-    // when
-    class TestExtractor extends BrowserTokenExtractor {
-      override getBrowserCookiePaths(): string[] {
-        return [cookiePath]
+      // when
+      class TestExtractor extends BrowserTokenExtractor {
+        override getBrowserCookiePaths(): string[] {
+          return [cookiePath]
+        }
+        override decryptMacCookie(encryptedData: Buffer): string | null {
+          return this.decryptAESCBC(encryptedData, key)
+        }
       }
-      override decryptMacCookie(encryptedData: Buffer): string | null {
-        return this.decryptAESCBC(encryptedData, key)
-      }
-    }
 
-    const extractor = new TestExtractor('darwin')
-    const result = await extractor.extract()
+      const extractor = new TestExtractor('darwin')
+      const result = await extractor.extract()
 
-    // then
-    expect(result).toEqual({ token_v2: 'v02%3Aencrypted-browser-token' })
-  })
+      // then
+      expect(result).toEqual({ token_v2: 'v02%3Aencrypted-browser-token' })
+    },
+  )
 
   test('extract includes user_ids from notion_users cookie', async () => {
     // given
@@ -380,41 +407,48 @@ describe('BrowserTokenExtractor', () => {
     expect(result?.user_ids).toBeUndefined()
   })
 
-  test('extract prefers the newest matching Notion cookie row', async () => {
-    const homeBase = mkdtempSync(join(tmpdir(), 'browser-latest-'))
-    tempDirs.push(homeBase)
+  test.each(['www.notion.so', 'www.notion.com', 'app.notion.com'])(
+    'extract prefers a newer %s token over a stale notion.so token',
+    async (hostKey) => {
+      const homeBase = mkdtempSync(join(tmpdir(), 'browser-latest-'))
+      tempDirs.push(homeBase)
 
-    const profileDir = createBrowserProfile(homeBase, 'TestBrowser', 'Default')
-    const cookiePath = join(profileDir, 'Cookies')
+      const profileDir = createBrowserProfile(homeBase, 'TestBrowser', 'Default')
+      const cookiePath = join(profileDir, 'Cookies')
 
-    createCookiesDb(cookiePath, [
-      {
-        name: 'token_v2',
-        value: 'v02%3Astale-token',
-        encrypted_value: new Uint8Array(),
-        host_key: '.notion.so',
-        last_access_utc: 1,
-      },
-      {
-        name: 'token_v2',
-        value: 'v02%3Afresh-token',
-        encrypted_value: new Uint8Array(),
-        host_key: 'www.notion.so',
-        last_access_utc: 10,
-      },
-    ])
+      createCookiesDb(cookiePath, [
+        {
+          name: 'token_v2',
+          value: 'v02%3Astale-token',
+          encrypted_value: new Uint8Array(),
+          host_key: '.notion.so',
+          last_access_utc: 1,
+        },
+        {
+          name: 'token_v2',
+          value: 'v02%3Afresh-token',
+          encrypted_value: new Uint8Array(),
+          host_key: hostKey,
+          last_access_utc: 10,
+        },
+      ])
 
-    class TestExtractor extends BrowserTokenExtractor {
-      override getBrowserCookiePaths(): string[] {
-        return [cookiePath]
+      class TestExtractor extends BrowserTokenExtractor {
+        override getBrowserCookiePaths(): string[] {
+          return [cookiePath]
+        }
       }
-    }
 
-    const extractor = new TestExtractor('darwin')
-    const result = await extractor.extract()
+      const extractor = new TestExtractor('darwin')
+      const result = await extractor.extract()
 
-    expect(result).toEqual({ token_v2: 'v02%3Afresh-token' })
-  })
+      expect(result).toEqual({ token_v2: 'v02%3Afresh-token' })
+      expect(await extractor.extractAll()).toEqual([
+        { token_v2: 'v02%3Afresh-token' },
+        { token_v2: 'v02%3Astale-token' },
+      ])
+    },
+  )
 
   test('isEncryptedValue detects v10 prefix', () => {
     const extractor = new BrowserTokenExtractor('darwin')
